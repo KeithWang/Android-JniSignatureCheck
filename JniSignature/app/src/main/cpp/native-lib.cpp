@@ -3,6 +3,9 @@
 #include "signature.cpp"
 #include "aes/aes.h"
 
+
+static const uint8_t AES_IV[] = "1234567812345678";
+
 jstring charToJstring(JNIEnv *env, char *src) {
 
     jsize len = strlen(src);
@@ -89,9 +92,10 @@ Java_keithwang_jnisignature_Jni_encode(
 
     uint8_t *AES_KEY = (uint8_t *) (getKey());
     const char *in = env->GetStringUTFChars(str_, JNI_FALSE);
-    char *baseResult = AES_128_ECB_PKCS5Padding_Encrypt(in, AES_KEY);
+//    char *baseResult = AES_ECB_PKCS7_Encrypt(in, AES_KEY);
+    char *baseResult = AES_CBC_PKCS7_Encrypt(in, AES_KEY, AES_IV);
     env->ReleaseStringUTFChars(str_, in);
-    return env->NewStringUTF(baseResult);
+    return charToJstring(env, baseResult);
 }
 
 
@@ -105,7 +109,7 @@ Java_keithwang_jnisignature_Jni_decode(
 
     uint8_t *AES_KEY = (uint8_t *) getKey();
     const char *str = env->GetStringUTFChars(str_, JNI_FALSE);
-    char *desResult = AES_128_ECB_PKCS5Padding_Decrypt(str, AES_KEY);
+    char *desResult = AES_CBC_PKCS7_Decrypt(str, AES_KEY, AES_IV);
     env->ReleaseStringUTFChars(str_, str);
 //    return (*env)->NewStringUTF(env, desResult);
     //不用系统自带的方法NewStringUTF是因为如果desResult是乱码,会抛出异常

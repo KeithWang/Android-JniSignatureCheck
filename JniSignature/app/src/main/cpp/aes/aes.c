@@ -1,40 +1,6 @@
-/*
-
-This is an implementation of the AES128 algorithm, specifically ECB and CBC mode.
-
-The implementation is verified against the test vectors in:
-  National Institute of Standards and Technology Special Publication 800-38A 2001 ED
-
-ECB-AES128
-----------
-
-  plain-text:
-    6bc1bee22e409f96e93d7e117393172a
-    ae2d8a571e03ac9c9eb76fac45af8e51
-    30c81c46a35ce411e5fbc1191a0a52ef
-    f69f2445df4f9b17ad2b417be66c3710
-
-  key:
-    2b7e151628aed2a6abf7158809cf4f3c
-
-  resulting cipher
-    3ad77bb40d7a3660a89ecaf32466ef97 
-    f5d3d58503b9699de785895a96fdbaaf 
-    43b1cd7f598ece23881b00e3ed030688 
-    7b0c785e27e8ad3f8223207104725dd4 
-
-
-NOTE:   String length must be evenly divisible by 16byte (str_len % 16 == 0)
-        You should pad the end of the string with zeros if this is not the case.
-
-*/
-
-
 /*****************************************************************************/
 /* Includes:                                                                 */
 /*****************************************************************************/
-
-#include <string.h>
 #include "aes.h"
 
 
@@ -43,14 +9,10 @@ NOTE:   String length must be evenly divisible by 16byte (str_len % 16 == 0)
 /*****************************************************************************/
 // The number of columns comprising a state in AES. This is a constant in AES. Value=4
 #define Nb 4
-// The number of 32 bit words in a key.
-#define Nk 4
-// Key length in bytes [128 bit]
-#define KEYLEN 16
-// The number of rounds in AES Cipher.
-#define Nr 10
+// aes BLOCK SIZE. Value=16
+#define BLOCK_SIZE 16
 
-// jcallan@github points out that declaring Multiply as a function 
+// jcallan@github points out that declaring Multiply as a function
 // reduces code size considerably with the Keil ARM compiler.
 // See this link for more information: https://github.com/kokke/tiny-AES128-C/pull/3
 #ifndef MULTIPLY_AS_A_FUNCTION
@@ -66,21 +28,28 @@ typedef uint8_t state_t[4][4];
 static state_t *state;
 
 // The array that stores the round keys.
-static uint8_t RoundKey[176];
+static uint8_t RoundKey[240];
 
 // The Key input to the AES Program
 static const uint8_t *Key;
+
+// The number of 32 bit words in a key.
+static char Nk;//4 for aes 128
+// The number of rounds in AES Cipher.
+static char Nr;//10 for aes 128
+// Key length in bytes [128 bit].
+static char KEYLEN;//16 for aes 128
+
 #if defined(CBC) && CBC
 // Initial Vector used only for CBC mode
 static uint8_t *Iv;
 #endif
 
 // The lookup-tables are marked const so they can be placed in read-only storage instead of RAM
-// The numbers below can be computed dynamically trading ROM for RAM - 
+// The numbers below can be computed dynamically trading ROM for RAM -
 // This can be useful in (embedded) bootloader applications, where ROM is often limited.
 static const uint8_t sbox[256] = {
-        //0     1    2      3     4    5     6     7      8    9     A      B    C     D     E
-        //F
+        //0     1    2      3     4    5     6     7      8    9     A      B    C     D     E     F
         0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab,
         0x76,
         0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72,
@@ -149,41 +118,11 @@ static const uint8_t rsbox[256] =
          0x7d};
 
 
-// The round constant word array, Rcon[i], contains the values given by 
+// The round constant word array, Rcon[i], contains the values given by
 // x to th e power (i-1) being powers of x (x is denoted as {02}) in the field GF(2^8)
 // Note that i starts at 1, not 0).
-static const uint8_t Rcon[255] = {
-        0x8d, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36, 0x6c, 0xd8, 0xab, 0x4d,
-        0x9a,
-        0x2f, 0x5e, 0xbc, 0x63, 0xc6, 0x97, 0x35, 0x6a, 0xd4, 0xb3, 0x7d, 0xfa, 0xef, 0xc5, 0x91,
-        0x39,
-        0x72, 0xe4, 0xd3, 0xbd, 0x61, 0xc2, 0x9f, 0x25, 0x4a, 0x94, 0x33, 0x66, 0xcc, 0x83, 0x1d,
-        0x3a,
-        0x74, 0xe8, 0xcb, 0x8d, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36, 0x6c,
-        0xd8,
-        0xab, 0x4d, 0x9a, 0x2f, 0x5e, 0xbc, 0x63, 0xc6, 0x97, 0x35, 0x6a, 0xd4, 0xb3, 0x7d, 0xfa,
-        0xef,
-        0xc5, 0x91, 0x39, 0x72, 0xe4, 0xd3, 0xbd, 0x61, 0xc2, 0x9f, 0x25, 0x4a, 0x94, 0x33, 0x66,
-        0xcc,
-        0x83, 0x1d, 0x3a, 0x74, 0xe8, 0xcb, 0x8d, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80,
-        0x1b,
-        0x36, 0x6c, 0xd8, 0xab, 0x4d, 0x9a, 0x2f, 0x5e, 0xbc, 0x63, 0xc6, 0x97, 0x35, 0x6a, 0xd4,
-        0xb3,
-        0x7d, 0xfa, 0xef, 0xc5, 0x91, 0x39, 0x72, 0xe4, 0xd3, 0xbd, 0x61, 0xc2, 0x9f, 0x25, 0x4a,
-        0x94,
-        0x33, 0x66, 0xcc, 0x83, 0x1d, 0x3a, 0x74, 0xe8, 0xcb, 0x8d, 0x01, 0x02, 0x04, 0x08, 0x10,
-        0x20,
-        0x40, 0x80, 0x1b, 0x36, 0x6c, 0xd8, 0xab, 0x4d, 0x9a, 0x2f, 0x5e, 0xbc, 0x63, 0xc6, 0x97,
-        0x35,
-        0x6a, 0xd4, 0xb3, 0x7d, 0xfa, 0xef, 0xc5, 0x91, 0x39, 0x72, 0xe4, 0xd3, 0xbd, 0x61, 0xc2,
-        0x9f,
-        0x25, 0x4a, 0x94, 0x33, 0x66, 0xcc, 0x83, 0x1d, 0x3a, 0x74, 0xe8, 0xcb, 0x8d, 0x01, 0x02,
-        0x04,
-        0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36, 0x6c, 0xd8, 0xab, 0x4d, 0x9a, 0x2f, 0x5e, 0xbc,
-        0x63,
-        0xc6, 0x97, 0x35, 0x6a, 0xd4, 0xb3, 0x7d, 0xfa, 0xef, 0xc5, 0x91, 0x39, 0x72, 0xe4, 0xd3,
-        0xbd,
-        0x61, 0xc2, 0x9f, 0x25, 0x4a, 0x94, 0x33, 0x66, 0xcc, 0x83, 0x1d, 0x3a, 0x74, 0xe8, 0xcb};
+static const uint8_t Rcon[15] = {
+        0x8d, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x36, 0x6c, 0xd8, 0xab, 0x4d};
 
 
 /*****************************************************************************/
@@ -197,10 +136,13 @@ static uint8_t getSBoxInvert(uint8_t num) {
     return rsbox[num];
 }
 
-// This function produces Nb(Nr+1) round keys. The round keys are used in each round to decrypt the states. 
+// This function produces Nb(Nr+1) round keys. The round keys are used in each round to decrypt the states.
 static void KeyExpansion(void) {
     uint32_t i, j, k;
     uint8_t tempa[4]; // Used for the column/row operations
+
+    Nk = KEYLEN / 4;
+    Nr = 6 + Nk;
 
     // The first round key is the key itself.
     for (i = 0; i < Nk; ++i) {
@@ -464,9 +406,9 @@ static void InvCipher(void) {
     AddRoundKey(0);
 }
 
-static void BlockCopy(uint8_t *output, uint8_t *input) {
+static void BlockCopy(uint8_t *output, const uint8_t *input) {
     uint8_t i;
-    for (i = 0; i < KEYLEN; ++i) {
+    for (i = 0; i < BLOCK_SIZE; ++i) {
         output[i] = input[i];
     }
 }
@@ -476,173 +418,263 @@ static void BlockCopy(uint8_t *output, uint8_t *input) {
 /*****************************************************************************/
 /* Public functions:                                                         */
 /*****************************************************************************/
+
+static inline int *findPaddingIndex(uint8_t *str, size_t length) {
+    static int result[] = {-1, -1}, i, k;
+    for (i = 0; i < length; ++i) {
+        char c = str[length - i];
+        if ('\0' != c) {
+            result[0] = i;
+            for (k = 0; k < BLOCK_SIZE; ++k) {
+                if (HEX[k] == c) {
+                    if (0 == k) {
+                        k = BLOCK_SIZE;
+                    }
+                    result[1] = k;
+                    return result;
+                }
+            }
+            return result;
+        }
+    }
+}
+
+static inline uint8_t *getPKCS7PaddingInput(const char *in) {
+    int inLength = (int) strlen(in);//输入的长度
+    int remainder = inLength % BLOCK_SIZE;
+    uint8_t *paddingInput;
+    int group = inLength / BLOCK_SIZE;
+    int size = BLOCK_SIZE * (group + 1);
+    paddingInput = (uint8_t *) malloc(size + 1);
+
+    int dif = size - inLength;
+    for (int i = 0; i < size; i++) {
+        if (i < inLength) {
+            paddingInput[i] = in[i];
+        } else {
+            if (remainder == 0) {
+                //刚好是16倍数,就填充16个16
+                paddingInput[i] = HEX[0];
+            } else {    //如果不足16位 少多少位就补几个几  如：少4为就补4个4 以此类推
+                paddingInput[i] = HEX[dif];
+            }
+        }
+    }
+    paddingInput[size] = '\0';
+    return paddingInput;
+}
+
+static inline void removePKCS7Padding(uint8_t *out, const size_t inputLength) {
+    int *result = findPaddingIndex(out, inputLength - 1);
+    int offSetIndex = result[0];
+    int lastChar = result[1];
+    //检查是不是padding的字符,然后去掉
+    const size_t noZeroIndex = inputLength - offSetIndex;
+    if (lastChar >= 0 && offSetIndex >= 0) {
+        int success = 1;
+        for (int i = 0; i < lastChar; ++i) {
+            size_t index = noZeroIndex - lastChar + i;
+            if (!HEX[lastChar] == out[index]) {
+                success = 0;
+            }
+        }
+        if (1 == success) {
+            out[noZeroIndex - lastChar] = '\0';
+            memset(out + noZeroIndex - lastChar + 1, 0, lastChar - 1);
+        }
+    } else {
+        out[noZeroIndex] = '\0';
+    }
+}
+
 #if defined(ECB) && ECB
 
 
-void AES128_ECB_encrypt(uint8_t *input, const uint8_t *key, uint8_t *output) {
+static inline void AES_ECB_encrypt(const uint8_t *input, const uint8_t *key, uint8_t *output) {
     // Copy input to output, and work in-memory on output
     BlockCopy(output, input);
     state = (state_t *) output;
 
-    Key = key;
-    KeyExpansion();
+    if (Key != key) {
+        Key = key;
+        KeyExpansion();
+    }
 
     // The next function call encrypts the PlainText with the Key using AES algorithm.
     Cipher();
 }
 
-void AES128_ECB_decrypt(uint8_t *input, const uint8_t *key, uint8_t *output) {
+static inline void AES_ECB_decrypt(const uint8_t *input, const uint8_t *key, uint8_t *output) {
     // Copy input to output, and work in-memory on output
     BlockCopy(output, input);
     state = (state_t *) output;
 
-    // The KeyExpansion routine must be called before encryption.
-    Key = key;
-    KeyExpansion();
+    if (Key != key) {
+        Key = key;
+        KeyExpansion();
+    }
 
     InvCipher();
 }
 
 /**
- * 不定长加密,pkcs5padding
+ * 不定长加密,pkcs7padding，根据密钥长度自动选择128、192、256算法
  */
-char *AES_128_ECB_PKCS5Padding_Encrypt(const char *in, const uint8_t *key) {
-
-    int inLength = (int) strlen(in);//输入的长度
-    int remainder = inLength % 16;
-    //LOGE("输入: ");
-//    LOGEX(in,inLength);
-    //LOGE(in);
-    //LOGE("输入,转码:");
-    //LOGE(b64_encode(in, inLength));
-    //LOGE("key:");
-    //LOGE(key);
-    uint8_t *paddingInput;
-//    int paddingInputLengt=PKCS5Padding(inLength,in,paddingInput);
-    int paddingInputLengt = 0;
-    if (inLength < 16) {
-        paddingInput = (uint8_t *) malloc(16);
-        paddingInputLengt = 16;
-        int i;
-        for (i = 0; i < 16; i++) {
-            if (i < inLength) {
-                paddingInput[i] = in[i];
-            } else {
-                paddingInput[i] = HEX[16 - inLength];
-            }
-        }
-    } else {
-        int group = inLength / 16;
-        int size = 16 * (group + 1);
-        paddingInput = (uint8_t *) malloc(size);
-        paddingInputLengt = size;
-
-        int dif = size - inLength;
-        int i;
-        for (i = 0; i < size; i++) {
-            if (i < inLength) {
-                paddingInput[i] = in[i];
-            } else {
-                if (remainder == 0) {
-                    //刚好是16倍数,就填充16个16
-                    paddingInput[i] = HEX[0];
-                } else {    //如果不足16位 少多少位就补几个几  如：少4为就补4个4 以此类推
-                    paddingInput[i] = HEX[dif];
-                }
-            }
-        }
-    }
-    int count = paddingInputLengt / 16;
+char *AES_ECB_PKCS7_Encrypt(const char *in, const uint8_t *key) {
+    KEYLEN = strlen(key);
+    uint8_t *paddingInput = getPKCS7PaddingInput(in);
+    int paddingInputLengt = strlen(paddingInput);
+    int count = paddingInputLengt / BLOCK_SIZE;
     //开始分段加密
     char *out = (char *) malloc(paddingInputLengt);
-    int i;
-    for (i = 0; i < count; ++i) {
-        AES128_ECB_encrypt(paddingInput + i * 16, key, (uint8_t *) (out + i * 16));
+    for (int i = 0; i < count; ++i) {
+        AES_ECB_encrypt(paddingInput + i * BLOCK_SIZE, key, out + i * BLOCK_SIZE);
     }
     char *base64En = b64_encode(out, paddingInputLengt);
-    //LOGE(base64En);
     free(paddingInput);
     free(out);
     return base64En;
 }
 
-
 /**
- * 不定长解密,pkcs5padding
+ * 不定长解密,pkcs7padding，根据密钥长度自动选择128、192、256算法
  */
-char *AES_128_ECB_PKCS5Padding_Decrypt(const char *in, const uint8_t *key) {
-    //加密前:1
-    //key:1234567890abcdef
-    //加密后:qkrxxA9fIF636aITDRJhcg==
-
-//    in="m74nCuZkzK13anBQRDWeOw==";//123456
-//    in="qkrxxA9fIF636aITDRJhcg==";//1
-//    in="LuD5WoRRcHq1tuEWZQHLHwLexWUsAhX5OvafAJ8PbVg=";//abcdefghijklmnop
-//    in="+R99oRBuckos5mdUqQHHeoja4/HYqWtqTM3cgl+E0a3p5i7DoLeBpq/mVUfuEh5D1VRn4Wt4TzHazvz931WfiA==";//57yW56CB5Y6f55CGOuWwhjPkuKrlrZfoioLovazmjaLmiJA05Liq5a2X6IqC
-//    in="UUNc8Dh0OVZE9UyzJwWTSVkt3hgIxg0nfVHpSirRL3T1meUZDRUINWvoYfkcOEpL";//编码原理:将3个字节转换成4个字节
-//    in="Yrl8Sryq7Kpce4UWRfG3bBBYpzXv59Muj0wjkJYRHFb73CogeDRfQCXsjSfxTe0gibaf+f1FLekwow0f1W9stJy3q7CNOPzkSJVdCtyZvIxMxLwz9hyatUJnU4Nq6i2gkaiCZcwHuDtrAHpEoy1k0vudpWhGu2457iSc40Tqw4tQnxKX18DcKNG5/KPUM+A5Y9a3FxaAy84Turio78b+6A==";//{"Json解析":"支持格式化高亮折叠","支持XML转换":"支持XML转换Json,Json转XML","Json格式验证":"更详细准确的错误信息"}
-    //LOGE("输入:");
-    //LOGE(in);
-    uint8_t *inputDesBase64 = b64_decode(in, strlen(in));
-    const size_t inputLength = (strlen(in) / 4) * 3;
+char *AES_ECB_PKCS7_Decrypt(const char *in, const uint8_t *key) {
+    KEYLEN = strlen(key);
+    size_t len = strlen(in);
+    uint8_t *inputDesBase64 = b64_decode(in, len);
+    const size_t inputLength = (len / 4) * 3;
     uint8_t *out = malloc(inputLength);
     memset(out, 0, inputLength);
-    size_t count = inputLength / 16;
+    size_t count = inputLength / BLOCK_SIZE;
     if (count <= 0) {
         count = 1;
     }
-    size_t i;
-    for (i = 0; i < count; ++i) {
-        AES128_ECB_decrypt(inputDesBase64 + i * 16, key, out + i * 16);
+    for (size_t i = 0; i < count; ++i) {
+        AES_ECB_decrypt(inputDesBase64 + i * BLOCK_SIZE, key, out + i * BLOCK_SIZE);
     }
 
-
-    //去除结尾垃圾字符串 begin
-    int index = findPaddingIndex(out);
-    if (index == NULL) {
-        return (char *) out;
-    }
-    if (index < strlen(out)) {//  if (index>strlen)  will crash.
-        memset(out + index, '\0', strlen(out) - index);
-    }
-    //去除结尾垃圾字符串 end
-
-
-    //LOGE("解密结果:");
-    //LOGE(out);
+    removePKCS7Padding(out, inputLength);
     free(inputDesBase64);
     return (char *) out;
 }
 
-/**
- * 查找结果中的一些 多余字符串
- * @param   str         ：   加密结果原文
- * @return  int         ：   垃圾字符串的开始位置
- */
-int findPaddingIndex(uint8_t *str) {
-    int i, k;
-    for (i = 0; i < strlen(str); i++) {
-        char c = str[i];
-        if ('\0' != c) {
-            for (k = 0; k < 16; ++k) {
-                if (HEX[k] == c && HEX[k] != 0x0a) {//"\n"算正常字符
-                    return i;
-                }
-            }
-        }
-    }
-    return i;
-}
+#endif // #if defined(ECB) && ECB
 
-
-/**
- *
- * 这里干掉了CBC 相关代码 ，这块代码是一个AES的一个带有向量的算法
- * 找寻这些代码 请移步 https://github.com/kokke/tiny-AES128-C
 
 #if defined(CBC) && CBC
+
+
+static void XorWithIv(uint8_t *buf) {
+    uint8_t i;
+    for (i = 0; i < BLOCK_SIZE; ++i) {
+        buf[i] ^= Iv[i];
+    }
+}
+
+void AES_CBC_encrypt(uint8_t *output, uint8_t *input, uint32_t length, const uint8_t *key,
+                     const uint8_t *iv) {
+    uintptr_t i;
+    uint8_t remainders = length % BLOCK_SIZE; /* Remaining bytes in the last non-full block */
+
+    BlockCopy(output, input);
+    state = (state_t *) output;
+
+    // Skip the key expansion if key is passed as 0
+    if (0 != key) {
+        Key = key;
+        KeyExpansion();
+    }
+
+    if (iv != 0) {
+        Iv = (uint8_t *) iv;
+    }
+
+    for (i = 0; i < length; i += BLOCK_SIZE) {
+        XorWithIv(input);
+        BlockCopy(output, input);
+        state = (state_t *) output;
+        Cipher();
+        Iv = output;
+        input += BLOCK_SIZE;
+        output += BLOCK_SIZE;
+    }
+
+    if (remainders) {
+        BlockCopy(output, input);
+        memset(output + remainders, 0, BLOCK_SIZE - remainders); /* add 0-padding */
+        state = (state_t *) output;
+        Cipher();
+    }
+}
+
+void AES_CBC_decrypt(uint8_t *output, uint8_t *input, uint32_t length, const uint8_t *key,
+                     const uint8_t *iv) {
+    uintptr_t i;
+    uint8_t remainders = length % BLOCK_SIZE; /* Remaining bytes in the last non-full block */
+
+    BlockCopy(output, input);
+    state = (state_t *) output;
+
+    // Skip the key expansion if key is passed as 0
+    if (0 != key) {
+        Key = key;
+        KeyExpansion();
+    }
+
+    // If iv is passed as 0, we continue to encrypt without re-setting the Iv
+    if (iv != 0) {
+        Iv = (uint8_t *) iv;
+    }
+
+    for (i = 0; i < length; i += BLOCK_SIZE) {
+        BlockCopy(output, input);
+        state = (state_t *) output;
+        InvCipher();
+        XorWithIv(output);
+        Iv = input;
+        input += BLOCK_SIZE;
+        output += BLOCK_SIZE;
+    }
+
+    if (remainders) {
+        BlockCopy(output, input);
+        memset(output + remainders, 0, BLOCK_SIZE - remainders); /* add 0-padding */
+        state = (state_t *) output;
+        InvCipher();
+    }
+}
+
+/**
+ * 不定长加密,pkcs7padding，根据密钥长度自动选择128、192、256算法
+ */
+char *AES_CBC_PKCS7_Encrypt(const char *in, const uint8_t *key, const uint8_t *iv) {
+    KEYLEN = strlen(key);
+    uint8_t *paddingInput = getPKCS7PaddingInput(in);
+    int paddingInputLengt = strlen(paddingInput);
+    char *out = (char *) malloc(paddingInputLengt);
+    AES_CBC_encrypt(out, paddingInput, paddingInputLengt, key, iv);
+    char *base64En = b64_encode(out, paddingInputLengt);
+    free(paddingInput);
+    free(out);
+    return base64En;
+}
+
+/**
+ * 不定长解密,pkcs7padding，根据密钥长度自动选择128、192、256算法
+ */
+char *AES_CBC_PKCS7_Decrypt(const char *in, const uint8_t *key, const uint8_t *iv) {
+    KEYLEN = strlen(key);
+    size_t len = strlen(in);
+    uint8_t *inputDesBase64 = b64_decode(in, len);
+    const size_t inputLength = (len / 4) * 3 / BLOCK_SIZE * BLOCK_SIZE;
+    uint8_t *out = malloc(inputLength);
+    memset(out, 0, inputLength);
+    AES_CBC_decrypt(out, inputDesBase64, inputLength, key, iv);
+
+    removePKCS7Padding(out, inputLength);
+    free(inputDesBase64);
+    return (char *) out;
+}
+
 #endif // #if defined(CBC) && CBC
-
-*/
-
-#endif // #if defined(ECB) && ECB
